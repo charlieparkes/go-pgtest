@@ -214,7 +214,7 @@ func (f *fixture) Psql(ctx context.Context, cmd []string, mounts []string, quiet
 	var err error
 	opts := dockertest.RunOptions{
 		Name:       "psql_" + fixtures.GetRandomName(0),
-		Repository: "governmentpaas/psql",
+		Repository: "governmentpaas/psql", // God save the queen. 🇬🇧
 		Tag:        "latest",
 		Env: []string{
 			"PGUSER=" + settings.User,
