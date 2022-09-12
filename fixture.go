@@ -10,10 +10,7 @@ import (
 	"time"
 
 	"github.com/charlieparkes/go-fixtures/v2"
-	"github.com/charlieparkes/go-structs"
-	"github.com/iancoleman/strcase"
 	"github.com/jackc/pgtype"
-	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/ory/dockertest/v3"
 	"go.uber.org/zap"
@@ -26,7 +23,6 @@ const (
 
 type fixture struct {
 	fixtures.BaseFixture
-	f            *fixtures.Fixtures
 	log          *zap.Logger
 	docker       *fixtures.Docker
 	settings     *ConnectionSettings
@@ -472,111 +468,4 @@ func (f *fixture) Tables(ctx context.Context, database string) ([]string, error)
 		tables = append(tables, table)
 	}
 	return tables, nil
-}
-
-type model interface {
-	TableName() string
-}
-
-func (f *fixture) ValidateModels(ctx context.Context, databaseName string, i ...interface{}) error {
-	for _, iface := range i {
-		if err := f.ValidateModel(ctx, databaseName, iface); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (f *fixture) ValidateModel(ctx context.Context, databaseName string, i interface{}) error {
-	var tableName string
-	switch v := i.(type) {
-	case model:
-		tableName = strings.Trim(v.TableName(), "\"")
-	default:
-		tableName = strcase.ToSnake(structs.Name(v))
-	}
-
-	var schemaName string = "public"
-	if s, t, found := strings.Cut(tableName, "."); found {
-		schemaName = strings.Trim(s, "\"")
-		tableName = strings.Trim(t, "\"")
-	}
-
-	exists, err := f.TableExists(ctx, databaseName, schemaName, tableName)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("table %v.%v does not exist", schemaName, tableName)
-	}
-
-	fieldNames := columns(i)
-	columnNames, err := f.TableColumns(ctx, databaseName, schemaName, tableName)
-	if err != nil {
-		return err
-	}
-
-	for _, f := range fieldNames {
-		found := false
-		for _, c := range columnNames {
-			if f == c {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("struct %v contains field %v which does not exist in table: %v.%v{%v}", structs.Name(i), f, schemaName, tableName, columnNames)
-		}
-	}
-	return nil
-}
-
-// Given a struct, return the expected column names.
-func columns(i interface{}) []string {
-	sf := structs.Fields(i)
-	fields := []string{}
-	for _, f := range sf {
-		if tag := f.Tag.Get("db"); tag == "-" {
-			continue
-		} else if tag == "" {
-			fields = append(fields, strcase.ToSnake(f.Name))
-		} else {
-			fields = append(fields, tag)
-		}
-	}
-	return fields
-}
-
-// Deprecated: use Settings()
-func (f *fixture) GetSettings() *ConnectionSettings {
-	return f.settings
-}
-
-// Deprecated: use ConnConfig()
-func (f *fixture) GetConnConfig() (*pgxpool.Config, error) {
-	return pgxpool.ParseConfig(f.settings.String())
-}
-
-// Deprecated: use Connect(ctx, PostgresConnDatabase("database_name"))
-func (f *fixture) GetConnection(ctx context.Context, database string) (*pgx.Conn, error) {
-	settings := f.settings.Copy()
-	if database != "" {
-		settings.Database = database
-	}
-	return settings.Connect(ctx)
-}
-
-// Deprecated: use HostName()
-func (f *fixture) GetHostName() string {
-	return f.HostName()
-}
-
-// Deprecated: use Tables()
-func (f *fixture) GetTables(ctx context.Context, database string) ([]string, error) {
-	return f.Tables(ctx, database)
-}
-
-// Deprecated: use TableColumns()
-func (f *fixture) GetTableColumns(ctx context.Context, database, schema, table string) ([]string, error) {
-	return f.TableColumns(ctx, database, schema, table)
 }
