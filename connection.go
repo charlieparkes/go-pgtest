@@ -20,7 +20,7 @@ type ConnectionSettings struct {
 	MaxOpenConns int
 }
 
-func (cs *ConnectionSettings) String() string {
+func (cs *ConnectionSettings) DSN() string {
 	sslmode := "require"
 	if cs.DisableSSL {
 		sslmode = "disable"
@@ -33,6 +33,25 @@ func (cs *ConnectionSettings) String() string {
 		cs.Database,
 		sslmode,
 	)
+}
+
+func (cs *ConnectionSettings) URL() string {
+	sslmode := "require"
+	if cs.DisableSSL {
+		sslmode = "disable"
+	}
+	return fmt.Sprintf("postgresql://%v:%v@%v:%v/%v?sslmode=%v",
+		cs.User,
+		cs.Password,
+		cs.Host,
+		cs.Port,
+		cs.Database,
+		sslmode,
+	)
+}
+
+func (cs *ConnectionSettings) String() string {
+	return cs.DSN()
 }
 
 func (cs *ConnectionSettings) Config() (*pgx.ConnConfig, error) {

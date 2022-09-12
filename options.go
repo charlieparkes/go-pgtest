@@ -16,13 +16,13 @@ func OptSettings(settings *ConnectionSettings) Opt {
 	}
 }
 
-func OptPostgresRepo(repo string) Opt {
+func OptRepo(repo string) Opt {
 	return func(f *Postgres) {
 		f.repo = repo
 	}
 }
 
-func OptPostgresVersion(version string) Opt {
+func OptVersion(version string) Opt {
 	return func(f *Postgres) {
 		f.version = version
 	}
