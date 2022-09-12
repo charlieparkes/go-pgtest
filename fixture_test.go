@@ -49,7 +49,7 @@ func TestPostgres(t *testing.T) {
 	}
 
 	// ValidateModel
-	require.NoError(t, p.ValidateModels(ctx, "", &Person{}))
+	require.NoError(t, ValidateModels(ctx, p, "", &Person{}))
 
 	// Dump
 	require.NoError(t, p.Dump(ctx, "testdata/tmp", "test.pgdump"))
