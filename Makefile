@@ -1,5 +1,16 @@
 -include $(shell [ -e .build-harness ] || curl -sSL -o .build-harness "https://git.io/fjZtV"; echo .build-harness)
 
+.DEFAULT_GOAL = all
+all: fmt vet test
+
+.PHONY: fmt
+fmt:
+	go fmt ./...
+
+.PHONY: vet
+vet:
+	go vet ./...
+
 .PHONY: recover
 recover:
 	@set -o pipefail; ( \
@@ -12,7 +23,7 @@ recover:
 .PHONY: test
 test:
 	@mkdir -p testdata/tmp
-	set -o pipefail; DEBUG=true go test ./... -v || $(MAKE) recover
+	set -o pipefail; go test ./... -v || $(MAKE) recover
 	@rm -rf testdata/tmp
 
 .PHONY: test-docker
@@ -23,7 +34,6 @@ test-docker:
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v $$PWD:$$PWD \
 		--workdir $$PWD \
-		-e DEBUG=true \
 		golang:1.18 \
 		go test ./... -v || $(MAKE) recover
 	@rm -rf testdata/tmp
@@ -38,7 +48,6 @@ test-docker-network:
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v $$PWD:$$PWD \
 		--workdir $$PWD \
-		-e DEBUG=true \
 		-e HOST_NETWORK_NAME=bridge-fixtures \
 		golang:1.18 \
 		go test ./... -v || $(MAKE) recover 

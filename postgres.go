@@ -1,4 +1,4 @@
-package fixtures
+package pgtest
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charlieparkes/go-fixtures/v2"
 	"github.com/charlieparkes/go-structs"
-	"github.com/docker/docker/pkg/namesgenerator"
 	"github.com/iancoleman/strcase"
 	"github.com/jackc/pgtype"
 	"github.com/jackc/pgx/v4"
@@ -24,99 +24,29 @@ const (
 	DEFAULT_POSTGRES_VERSION = "13-alpine"
 )
 
-type PostgresOpt func(*Postgres)
-
-func NewPostgres(d *Docker, opts ...PostgresOpt) *Postgres {
-	f := &Postgres{
-		docker: d,
-	}
-	for _, opt := range opts {
-		opt(f)
-	}
-	return f
-}
-
-func PostgresDocker(d *Docker) PostgresOpt {
-	return func(f *Postgres) {
-		f.docker = d
-	}
-}
-
-func PostgresSettings(settings *ConnectionSettings) PostgresOpt {
-	return func(f *Postgres) {
-		f.settings = settings
-	}
-}
-
-func PostgresRepo(repo string) PostgresOpt {
-	return func(f *Postgres) {
-		f.repo = repo
-	}
-}
-
-func PostgresVersion(version string) PostgresOpt {
-	return func(f *Postgres) {
-		f.version = version
-	}
-}
-
-// Tell docker to kill the container after an unreasonable amount of test time to prevent orphans. Defaults to 600 seconds.
-func PostgresExpireAfter(expireAfter uint) PostgresOpt {
-	return func(f *Postgres) {
-		f.expireAfter = expireAfter
-	}
-}
-
-// Wait this long for operations to execute. Defaults to 30 seconds.
-func PostgresTimeoutAfter(timeoutAfter uint) PostgresOpt {
-	return func(f *Postgres) {
-		f.timeoutAfter = timeoutAfter
-	}
-}
-
-func PostgresSkipTearDown() PostgresOpt {
-	return func(f *Postgres) {
-		f.skipTearDown = true
-	}
-}
-
-func PostgresMounts(mounts []string) PostgresOpt {
-	return func(f *Postgres) {
-		f.mounts = mounts
-	}
-}
-
-func PostgresLogger(logger *zap.Logger) PostgresOpt {
-	return func(f *Postgres) {
-		f.log = logger
-	}
-}
-
-type Postgres struct {
-	BaseFixture
+type fixture struct {
+	fixtures.BaseFixture
+	f            *fixtures.Fixtures
 	log          *zap.Logger
-	docker       *Docker
+	docker       *fixtures.Docker
 	settings     *ConnectionSettings
 	resource     *dockertest.Resource
 	repo         string
 	version      string
+	name         string
 	expireAfter  uint
 	timeoutAfter uint
 	skipTearDown bool
 	mounts       []string
 }
 
-func (f *Postgres) Settings() *ConnectionSettings {
+func (f *fixture) Settings() *ConnectionSettings {
 	return f.settings
 }
 
-func (f *Postgres) ConnConfig() (*pgxpool.Config, error) {
-	return pgxpool.ParseConfig(f.settings.String())
-}
-
-func (f *Postgres) SetUp(ctx context.Context) error {
+func (f *fixture) SetUp(ctx context.Context) error {
 	if f.log == nil {
-		f.log = logger()
+		f.log = zap.Must(zap.NewDevelopment())
 	}
 	if f.repo == "" {
 		f.repo = DEFAULT_POSTGRES_REPO
@@ -124,19 +54,24 @@ func (f *Postgres) SetUp(ctx context.Context) error {
 	if f.version == "" {
 		f.version = DEFAULT_POSTGRES_VERSION
 	}
+	if f.name == "" {
+		f.name = "postgres"
+	}
 	if f.settings == nil {
 		f.settings = &ConnectionSettings{
 			User:       "postgres",
-			Password:   GenerateString(),
-			Database:   f.docker.NamePrefix(),
+			Password:   fixtures.GenerateString(),
+			Database:   f.name,
 			DisableSSL: true,
 		}
 	}
+
 	networks := make([]*dockertest.Network, 0)
 	if f.docker.Network() != nil {
 		networks = append(networks, f.docker.Network())
 	}
 	opts := dockertest.RunOptions{
+		Name:       f.name + "_" + fixtures.GetRandomName(0),
 		Repository: f.repo,
 		Tag:        f.version,
 		Env: []string{
@@ -151,18 +86,19 @@ func (f *Postgres) SetUp(ctx context.Context) error {
 			"-c", "synchronous_commit=off",
 			"-c", "full_page_writes=off",
 			"-c", "random_page_cost=1.1",
-			"-c", fmt.Sprintf("shared_buffers=%vMB", memoryMB()/8),
-			"-c", fmt.Sprintf("work_mem=%vMB", memoryMB()/8),
+			"-c", fmt.Sprintf("shared_buffers=%vMB", fixtures.MemoryMB()/8),
+			"-c", fmt.Sprintf("work_mem=%vMB", fixtures.MemoryMB()/8),
 		},
 		Mounts: f.mounts,
 	}
+
 	var err error
 	f.resource, err = f.docker.Pool().RunWithOptions(&opts)
 	if err != nil {
 		return err
 	}
 
-	f.settings.Host = ContainerAddress(f.resource, f.docker.Network())
+	f.settings.Host = fixtures.ContainerAddress(f.resource, f.docker.Network())
 
 	if f.expireAfter == 0 {
 		f.expireAfter = 600
@@ -178,50 +114,59 @@ func (f *Postgres) SetUp(ctx context.Context) error {
 	return nil
 }
 
-func (f *Postgres) TearDown(ctx context.Context) error {
+func (f *fixture) TearDown(ctx context.Context) error {
 	if f.skipTearDown {
 		return nil
 	}
-	wg.Add(1)
-	go purge(f.docker.Pool(), f.resource)
+	f.docker.Purge(f.resource)
 	return nil
 }
 
-type PostgresConnConfig struct {
+// RecoverTearDown returns a deferrable function that will teardown in the event of a panic.
+func (f *fixture) RecoverTearDown(ctx context.Context) {
+	if r := recover(); r != nil {
+		if err := f.TearDown(ctx); err != nil {
+			f.log.Warn("failed to tear down", zap.Error(err))
+		}
+		panic(r)
+	}
+}
+
+type connConfig struct {
 	poolConfig *pgxpool.Config
 	role       string
 	database   string
 	createCopy bool
 }
 
-type PostgresConnOpt func(*PostgresConnConfig)
+type ConnOpt func(*connConfig)
 
-func PostgresConnRole(role string) PostgresConnOpt {
-	return func(f *PostgresConnConfig) {
+func PostgresConnRole(role string) ConnOpt {
+	return func(f *connConfig) {
 		f.role = role
 	}
 }
 
-func PostgresConnDatabase(database string) PostgresConnOpt {
-	return func(f *PostgresConnConfig) {
+func PostgresConnDatabase(database string) ConnOpt {
+	return func(f *connConfig) {
 		if database != "" {
 			f.database = database
 		}
 	}
 }
 
-func PostgresConnCreateCopy() PostgresConnOpt {
-	return func(f *PostgresConnConfig) {
+func PostgresConnCreateCopy() ConnOpt {
+	return func(f *connConfig) {
 		f.createCopy = true
 	}
 }
 
-func (f *Postgres) Connect(ctx context.Context, opts ...PostgresConnOpt) (*pgxpool.Pool, error) {
-	poolConfig, err := f.ConnConfig()
+func (f *fixture) Connect(ctx context.Context, opts ...ConnOpt) (*pgxpool.Pool, error) {
+	poolConfig, err := f.Settings().PoolConfig()
 	if err != nil {
 		return nil, err
 	}
-	cfg := &PostgresConnConfig{
+	cfg := &connConfig{
 		poolConfig: poolConfig,
 	}
 	for _, opt := range opts {
@@ -231,7 +176,7 @@ func (f *Postgres) Connect(ctx context.Context, opts ...PostgresConnOpt) (*pgxpo
 		cfg.poolConfig.ConnConfig.Database = cfg.database
 	}
 	if cfg.createCopy {
-		copiedDatabaseName := namesgenerator.GetRandomName(0)
+		copiedDatabaseName := fixtures.GetRandomName(0)
 		if err := f.CopyDatabase(ctx, cfg.database, copiedDatabaseName); err != nil {
 			return nil, err
 		}
@@ -250,7 +195,7 @@ func (f *Postgres) Connect(ctx context.Context, opts ...PostgresConnOpt) (*pgxpo
 	return pool, nil
 }
 
-func (f *Postgres) MustConnect(ctx context.Context, opts ...PostgresConnOpt) *pgxpool.Pool {
+func (f *fixture) MustConnect(ctx context.Context, opts ...ConnOpt) *pgxpool.Pool {
 	pool, err := f.Connect(ctx, opts...)
 	if err != nil {
 		panic(err)
@@ -258,16 +203,17 @@ func (f *Postgres) MustConnect(ctx context.Context, opts ...PostgresConnOpt) *pg
 	return pool
 }
 
-func (f *Postgres) HostName() string {
-	return HostName(f.resource)
+func (f *fixture) HostName() string {
+	return fixtures.HostName(f.resource)
 }
 
-func (f *Postgres) Psql(ctx context.Context, cmd []string, mounts []string, quiet bool) (int, error) {
+func (f *fixture) Psql(ctx context.Context, cmd []string, mounts []string, quiet bool) (int, error) {
 	// We're going to connect over the docker network
 	settings := f.settings.Copy()
-	settings.Host = HostIP(f.resource, f.docker.Network())
+	settings.Host = fixtures.HostIP(f.resource, f.docker.Network())
 	var err error
 	opts := dockertest.RunOptions{
+		Name:       "psql_" + fixtures.GetRandomName(0),
 		Repository: "governmentpaas/psql",
 		Tag:        "latest",
 		Env: []string{
@@ -283,33 +229,31 @@ func (f *Postgres) Psql(ctx context.Context, cmd []string, mounts []string, quie
 		},
 		Cmd: cmd,
 	}
-	// f.log.Debug("psql setup", zap.Any("environment", opts.Env))
 	resource, err := f.docker.Pool().RunWithOptions(&opts)
 	if err != nil {
 		return 0, err
 	}
-	exitCode, err := WaitForContainer(f.docker.Pool(), resource)
+	exitCode, err := fixtures.WaitForContainer(f.docker.Pool(), resource)
 	containerName := resource.Container.Name[1:]
 	containerID := resource.Container.ID[0:11]
 	if err != nil || exitCode != 0 && !quiet {
 		f.log.Debug("psql failed", zap.Int("status", exitCode), zap.String("container_name", containerName), zap.String("container_id", containerID), zap.String("cmd", strings.Join(cmd, " ")))
-		return exitCode, fmt.Errorf("psql exited with error (%v): %v", exitCode, getLogs(f.log, containerID, f.docker.Pool()))
+		return exitCode, fmt.Errorf("psql exited with error (code: %v)", exitCode)
 	}
-	if f.skipTearDown && getEnv().Debug {
+	if f.skipTearDown {
 		// If there was an issue, and debug is enabled, don't destroy the container.
 		return exitCode, nil
 	}
-	wg.Add(1)
-	go purge(f.docker.Pool(), resource)
+	f.docker.Purge(resource)
 	return exitCode, nil
 }
 
-func (f *Postgres) PingPsql(ctx context.Context) error {
+func (f *fixture) PingPsql(ctx context.Context) error {
 	_, err := f.Psql(ctx, []string{"psql", "-c", ";"}, []string{}, false)
 	return err
 }
 
-func (f *Postgres) Ping(ctx context.Context) error {
+func (f *fixture) Ping(ctx context.Context) error {
 	db, err := f.Connect(ctx)
 	if err != nil {
 		return err
@@ -318,7 +262,7 @@ func (f *Postgres) Ping(ctx context.Context) error {
 	return db.Ping(ctx)
 }
 
-func (f *Postgres) CreateDatabase(ctx context.Context, name string) error {
+func (f *fixture) CreateDatabase(ctx context.Context, name string) error {
 	if name == "" {
 		return errors.New("must provide a database name")
 	}
@@ -329,7 +273,7 @@ func (f *Postgres) CreateDatabase(ctx context.Context, name string) error {
 
 // CopyDatabase creates a copy of an existing postgres database using `createdb --template={source} {target}`
 // source will default to the primary database
-func (f *Postgres) CopyDatabase(ctx context.Context, source string, target string) error {
+func (f *fixture) CopyDatabase(ctx context.Context, source string, target string) error {
 	if source == "" {
 		source = f.settings.Database
 	}
@@ -338,7 +282,7 @@ func (f *Postgres) CopyDatabase(ctx context.Context, source string, target strin
 	return err
 }
 
-func (f *Postgres) DropDatabase(ctx context.Context, name string) error {
+func (f *fixture) DropDatabase(ctx context.Context, name string) error {
 	db, err := f.Connect(ctx, PostgresConnDatabase(name))
 	if err != nil {
 		return err
@@ -362,8 +306,8 @@ func (f *Postgres) DropDatabase(ctx context.Context, name string) error {
 	return err
 }
 
-func (f *Postgres) Dump(ctx context.Context, dir string, filename string) error {
-	path := FindPath(dir)
+func (f *fixture) Dump(ctx context.Context, dir string, filename string) error {
+	path := fixtures.FindPath(dir)
 	if path == "" {
 		return fmt.Errorf("could not resolve path: %v", dir)
 	}
@@ -372,8 +316,8 @@ func (f *Postgres) Dump(ctx context.Context, dir string, filename string) error 
 	return err
 }
 
-func (f *Postgres) Restore(ctx context.Context, dir string, filename string) error {
-	path := FindPath(dir)
+func (f *fixture) Restore(ctx context.Context, dir string, filename string) error {
+	path := fixtures.FindPath(dir)
 	if path == "" {
 		return fmt.Errorf("could not resolve path: %v", dir)
 	}
@@ -383,7 +327,7 @@ func (f *Postgres) Restore(ctx context.Context, dir string, filename string) err
 }
 
 // LoadSql runs a file or directory of *.sql files against the default postgres database.
-func (f *Postgres) LoadSql(ctx context.Context, path string) error {
+func (f *fixture) LoadSql(ctx context.Context, path string) error {
 	load := func(p string) error {
 		dir, err := filepath.Abs(filepath.Dir(p))
 		if err != nil {
@@ -417,9 +361,7 @@ func (f *Postgres) LoadSql(ctx context.Context, path string) error {
 }
 
 // LoadSqlPattern finds files matching a custom pattern and runs them against the default database.
-func (f *Postgres) LoadSqlPattern(ctx context.Context, pattern string) error {
-	// Load schema for this database if it exists.
-	// Note: We will load the schema based on the name of the database on the original database connection settings.
+func (f *fixture) LoadSqlPattern(ctx context.Context, pattern string) error {
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return err
@@ -435,11 +377,11 @@ func (f *Postgres) LoadSqlPattern(ctx context.Context, pattern string) error {
 
 // https://github.com/ory/dockertest/blob/v3/examples/PostgreSQL.md
 // https://stackoverflow.com/a/63011266
-func (f *Postgres) WaitForReady(ctx context.Context, d time.Duration) error {
-	if err := Retry(d, func() error {
+func (f *fixture) WaitForReady(ctx context.Context, d time.Duration) error {
+	if err := fixtures.Retry(d, func() error {
 		var err error
 
-		port := ContainerTcpPort(f.resource, f.docker.Network(), "5432")
+		port := fixtures.ContainerTcpPort(f.resource, f.docker.Network(), "5432")
 		if port == "" {
 			err = fmt.Errorf("could not get port from container: %+v", f.resource.Container)
 			return err
@@ -476,7 +418,7 @@ func (f *Postgres) WaitForReady(ctx context.Context, d time.Duration) error {
 	return nil
 }
 
-func (f *Postgres) TableExists(ctx context.Context, database, schema, table string) (bool, error) {
+func (f *fixture) TableExists(ctx context.Context, database, schema, table string) (bool, error) {
 	db, err := f.Connect(ctx, PostgresConnDatabase(database))
 	if err != nil {
 		return false, err
@@ -490,7 +432,7 @@ func (f *Postgres) TableExists(ctx context.Context, database, schema, table stri
 	return count == 1, nil
 }
 
-func (f *Postgres) TableColumns(ctx context.Context, database, schema, table string) ([]string, error) {
+func (f *fixture) TableColumns(ctx context.Context, database, schema, table string) ([]string, error) {
 	db, err := f.Connect(ctx, PostgresConnDatabase(database))
 	if err != nil {
 		return nil, err
@@ -510,7 +452,7 @@ func (f *Postgres) TableColumns(ctx context.Context, database, schema, table str
 	return cols, nil
 }
 
-func (f *Postgres) Tables(ctx context.Context, database string) ([]string, error) {
+func (f *fixture) Tables(ctx context.Context, database string) ([]string, error) {
 	db, err := f.Connect(ctx, PostgresConnDatabase(database))
 	if err != nil {
 		return nil, err
@@ -536,7 +478,7 @@ type model interface {
 	TableName() string
 }
 
-func (f *Postgres) ValidateModels(ctx context.Context, databaseName string, i ...interface{}) error {
+func (f *fixture) ValidateModels(ctx context.Context, databaseName string, i ...interface{}) error {
 	for _, iface := range i {
 		if err := f.ValidateModel(ctx, databaseName, iface); err != nil {
 			return err
@@ -545,7 +487,7 @@ func (f *Postgres) ValidateModels(ctx context.Context, databaseName string, i ..
 	return nil
 }
 
-func (f *Postgres) ValidateModel(ctx context.Context, databaseName string, i interface{}) error {
+func (f *fixture) ValidateModel(ctx context.Context, databaseName string, i interface{}) error {
 	var tableName string
 	switch v := i.(type) {
 	case model:
@@ -606,17 +548,17 @@ func columns(i interface{}) []string {
 }
 
 // Deprecated: use Settings()
-func (f *Postgres) GetSettings() *ConnectionSettings {
+func (f *fixture) GetSettings() *ConnectionSettings {
 	return f.settings
 }
 
 // Deprecated: use ConnConfig()
-func (f *Postgres) GetConnConfig() (*pgxpool.Config, error) {
+func (f *fixture) GetConnConfig() (*pgxpool.Config, error) {
 	return pgxpool.ParseConfig(f.settings.String())
 }
 
 // Deprecated: use Connect(ctx, PostgresConnDatabase("database_name"))
-func (f *Postgres) GetConnection(ctx context.Context, database string) (*pgx.Conn, error) {
+func (f *fixture) GetConnection(ctx context.Context, database string) (*pgx.Conn, error) {
 	settings := f.settings.Copy()
 	if database != "" {
 		settings.Database = database
@@ -625,16 +567,16 @@ func (f *Postgres) GetConnection(ctx context.Context, database string) (*pgx.Con
 }
 
 // Deprecated: use HostName()
-func (f *Postgres) GetHostName() string {
+func (f *fixture) GetHostName() string {
 	return f.HostName()
 }
 
 // Deprecated: use Tables()
-func (f *Postgres) GetTables(ctx context.Context, database string) ([]string, error) {
+func (f *fixture) GetTables(ctx context.Context, database string) ([]string, error) {
 	return f.Tables(ctx, database)
 }
 
 // Deprecated: use TableColumns()
-func (f *Postgres) GetTableColumns(ctx context.Context, database, schema, table string) ([]string, error) {
+func (f *fixture) GetTableColumns(ctx context.Context, database, schema, table string) ([]string, error) {
 	return f.TableColumns(ctx, database, schema, table)
 }

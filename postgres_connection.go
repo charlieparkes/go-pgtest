@@ -1,14 +1,16 @@
-package fixtures
+package pgtest
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 )
 
+// Since you shouldn't create a pgx.ConnConfig from scratch, ConnectionSettings exists to hold all the
+// parameters we'll need to work with throughout the lifecycle of a postgres database throughout tests.
 type ConnectionSettings struct {
-	Driver       string
 	Host         string
 	Port         string
 	User         string
@@ -31,6 +33,14 @@ func (cs *ConnectionSettings) String() string {
 		cs.Database,
 		sslmode,
 	)
+}
+
+func (cs *ConnectionSettings) Config() (*pgx.ConnConfig, error) {
+	return pgx.ParseConfig(cs.String())
+}
+
+func (cs *ConnectionSettings) PoolConfig() (*pgxpool.Config, error) {
+	return pgxpool.ParseConfig(cs.String())
 }
 
 func (cs *ConnectionSettings) Copy() *ConnectionSettings {

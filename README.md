@@ -1,10 +1,13 @@
-# go-fixtures
+# go-pgtest
 
-Import `github.com/charlieparkes/go-fixtures/v2`.
+Import `github.com/charlieparkes/go-pgtest`.
 
-Inspired by [pytest](https://github.com/pytest-dev/pytest), go-fixtures provides a collection of fixtures which automagically setup/teardown services.
+## Example
 
-### Supported Fixtures
-* docker: *`Docker`*
-* [postgres](./examples/postgres): *`Postgres`, `PostgresWithSchema`, `Psql`*
-* aws (localstack): coming soon
+For a full example, see [examples/](./examples/).
+
+```go
+    p, err := pgtest.NewPostgres(ctx)
+    pool, err := p.Connect(ctx)
+    p.TearDown(ctx)
+```
