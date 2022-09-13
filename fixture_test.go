@@ -58,7 +58,7 @@ func TestPostgres(t *testing.T) {
 	name := fixtures.GetRandomName(0)
 	require.NoError(t, p.CreateDatabase(ctx, name))
 
-	db, err = p.Connect(ctx, PostgresConnDatabase(name))
+	db, err = p.Connect(ctx, ConnOptDatabase(name))
 	require.NoError(t, err)
 	if err == nil {
 		db.Close()
@@ -68,7 +68,7 @@ func TestPostgres(t *testing.T) {
 	databaseName := fixtures.GetRandomName(0)
 	require.NoError(t, p.CopyDatabase(ctx, "", databaseName))
 
-	db, err = p.Connect(ctx, PostgresConnDatabase(databaseName))
+	db, err = p.Connect(ctx, ConnOptDatabase(databaseName))
 	require.NoError(t, err)
 	if err == nil {
 		db.Close()
@@ -88,7 +88,7 @@ func TestPostgres(t *testing.T) {
 	assert.True(t, exists)
 
 	// ConnectCopyDatabase
-	db, err = p.Connect(ctx, PostgresConnCreateCopy())
+	db, err = p.Connect(ctx, ConnOptCreateCopy())
 	require.NoError(t, err)
 	if err == nil {
 		db.Close()

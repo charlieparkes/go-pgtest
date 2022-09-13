@@ -137,13 +137,13 @@ type connConfig struct {
 
 type ConnOpt func(*connConfig)
 
-func PostgresConnRole(role string) ConnOpt {
+func ConnOptRole(role string) ConnOpt {
 	return func(f *connConfig) {
 		f.role = role
 	}
 }
 
-func PostgresConnDatabase(database string) ConnOpt {
+func ConnOptDatabase(database string) ConnOpt {
 	return func(f *connConfig) {
 		if database != "" {
 			f.database = database
@@ -151,7 +151,7 @@ func PostgresConnDatabase(database string) ConnOpt {
 	}
 }
 
-func PostgresConnCreateCopy() ConnOpt {
+func ConnOptCreateCopy() ConnOpt {
 	return func(f *connConfig) {
 		f.createCopy = true
 	}
@@ -279,7 +279,7 @@ func (f *fixture) CopyDatabase(ctx context.Context, source string, target string
 }
 
 func (f *fixture) DropDatabase(ctx context.Context, name string) error {
-	db, err := f.Connect(ctx, PostgresConnDatabase(name))
+	db, err := f.Connect(ctx, ConnOptDatabase(name))
 	if err != nil {
 		return err
 	}
@@ -415,7 +415,7 @@ func (f *fixture) WaitForReady(ctx context.Context, d time.Duration) error {
 }
 
 func (f *fixture) TableExists(ctx context.Context, database, schema, table string) (bool, error) {
-	db, err := f.Connect(ctx, PostgresConnDatabase(database))
+	db, err := f.Connect(ctx, ConnOptDatabase(database))
 	if err != nil {
 		return false, err
 	}
@@ -429,7 +429,7 @@ func (f *fixture) TableExists(ctx context.Context, database, schema, table strin
 }
 
 func (f *fixture) TableColumns(ctx context.Context, database, schema, table string) ([]string, error) {
-	db, err := f.Connect(ctx, PostgresConnDatabase(database))
+	db, err := f.Connect(ctx, ConnOptDatabase(database))
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +449,7 @@ func (f *fixture) TableColumns(ctx context.Context, database, schema, table stri
 }
 
 func (f *fixture) Tables(ctx context.Context, database string) ([]string, error) {
-	db, err := f.Connect(ctx, PostgresConnDatabase(database))
+	db, err := f.Connect(ctx, ConnOptDatabase(database))
 	if err != nil {
 		return nil, err
 	}
