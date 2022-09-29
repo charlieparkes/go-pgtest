@@ -34,6 +34,7 @@ type fixture struct {
 	timeoutAfter uint
 	skipTearDown bool
 	mounts       []string
+	copyTemplate string
 }
 
 func (f *fixture) Settings() *ConnectionSettings {
@@ -172,8 +173,16 @@ func (f *fixture) Connect(ctx context.Context, opts ...ConnOpt) (*pgxpool.Pool, 
 		cfg.poolConfig.ConnConfig.Database = cfg.database
 	}
 	if cfg.createCopy {
+		// To make this code more friendly for parallel tests, copy from a copy.
+		if f.copyTemplate == "" {
+			f.copyTemplate = fixtures.GetRandomName(0)
+			f.log.Debug("creating copy template", zap.String("target", f.copyTemplate))
+			if err := f.CopyDatabase(ctx, cfg.database, f.copyTemplate); err != nil {
+				return nil, err
+			}
+		}
 		copiedDatabaseName := fixtures.GetRandomName(0)
-		if err := f.CopyDatabase(ctx, cfg.database, copiedDatabaseName); err != nil {
+		if err := f.CopyDatabase(ctx, f.copyTemplate, copiedDatabaseName); err != nil {
 			return nil, err
 		}
 		cfg.poolConfig.ConnConfig.Database = copiedDatabaseName
@@ -268,7 +277,7 @@ func (f *fixture) CreateDatabase(ctx context.Context, name string) error {
 }
 
 // CopyDatabase creates a copy of an existing postgres database using `createdb --template={source} {target}`
-// source will default to the primary database
+// source will default to the primary database.
 func (f *fixture) CopyDatabase(ctx context.Context, source string, target string) error {
 	if source == "" {
 		source = f.settings.Database
